@@ -1106,33 +1106,77 @@ async function closeCurrentShift() {
 // =====================================================================================
 // P&L PROFIT & LOSS REPORT
 // =====================================================================================
+// Định dạng tiền VNĐ an toàn: làm tròn, không bao giờ ra "-0", "--" hay NaN
+function fmtVND(value, { sign = false } = {}) {
+  const n = Math.round(Number(value) || 0);
+  const abs = Math.abs(n).toLocaleString('vi-VN');
+  if (n < 0) return `-${abs} đ`;
+  if (sign && n > 0) return `+${abs} đ`;
+  return `${abs} đ`;
+}
+
+// Tỉ suất %: tránh số vô lý (ví dụ -12847.8%) khi doanh thu quá nhỏ so với chi phí
+function fmtPercent(value) {
+  const n = Number(value) || 0;
+  if (Math.abs(n) > 999) return n < 0 ? '< -999%' : '> 999%';
+  return `${n.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%`;
+}
+
+function setPnlText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function resetPnlView() {
+  ['pnl-revenue', 'pnl-cogs', 'pnl-gross-profit', 'pnl-net-profit',
+   'table-pnl-rev', 'table-pnl-cogs', 'table-pnl-gross', 'table-pnl-other-inc',
+   'table-pnl-opex', 'table-pnl-payroll', 'table-pnl-spoilage', 'table-pnl-net'
+  ].forEach(id => setPnlText(id, '0 đ'));
+  setPnlText('pnl-orders-count', '0 đơn hoàn tất');
+  setPnlText('pnl-gross-margin', 'Tỉ suất: 0%');
+  setPnlText('pnl-net-margin', 'Tỉ suất ròng: 0%');
+}
+
 async function loadProfitAndLoss() {
   try {
     const res = await fetch(`/api/reports/pnl?role=${AppState.currentRole}`, {
-      headers: { 'x-user-role': AppState.currentRole }
+      headers: { 'x-user-role': AppState.currentRole },
+      cache: 'no-store'
     });
-    const data = await res.json();
-    if (data.success && data.data) {
-      const pnl = data.data;
-      document.getElementById('pnl-revenue').textContent = `${pnl.doanhThuBanHang.toLocaleString('vi-VN')} đ`;
-      document.getElementById('pnl-orders-count').textContent = `${pnl.tongDonHang} đơn hoàn tất`;
-      document.getElementById('pnl-cogs').textContent = `${pnl.giaVonHangBan_COGS.toLocaleString('vi-VN')} đ`;
-      document.getElementById('pnl-gross-profit').textContent = `${pnl.loiNhuanGop.toLocaleString('vi-VN')} đ`;
-      document.getElementById('pnl-gross-margin').textContent = `Tỉ suất: ${pnl.tiSuatLoiNhuanGop}%`;
-      document.getElementById('pnl-net-profit').textContent = `${pnl.loiNhuanRong_NetProfit.toLocaleString('vi-VN')} đ`;
-      document.getElementById('pnl-net-margin').textContent = `Tỉ suất: ${pnl.tiSuatLoiNhuanRong}%`;
+    const data = await res.json().catch(() => null);
 
-      document.getElementById('table-pnl-rev').textContent = `${pnl.doanhThuBanHang.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-cogs').textContent = `-${pnl.giaVonHangBan_COGS.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-gross').textContent = `${pnl.loiNhuanGop.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-other-inc').textContent = `+${pnl.thuKhac.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-opex').textContent = `-${pnl.chiPhiVanHanh.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-payroll').textContent = `-${pnl.chiPhiLuong.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-spoilage').textContent = `-${pnl.chiPhiHaoHut.toLocaleString('vi-VN')} đ`;
-      document.getElementById('table-pnl-net').textContent = `${pnl.loiNhuanRong_NetProfit.toLocaleString('vi-VN')} đ`;
+    if (!res.ok || !data || !data.success || !data.data) {
+      resetPnlView();
+      const msg = (data && data.message) || `Không tải được báo cáo (HTTP ${res.status})`;
+      showToast(msg, 'error');
+      return;
     }
+
+    const pnl = data.data;
+    const margin = (v) => `Tỉ suất: ${fmtPercent(v)}`;
+
+    // Thẻ tổng quan
+    setPnlText('pnl-revenue', fmtVND(pnl.doanhThuBanHang));
+    setPnlText('pnl-orders-count', `${Number(pnl.tongDonHang) || 0} đơn hoàn tất`);
+    setPnlText('pnl-cogs', fmtVND(pnl.giaVonHangBan_COGS));
+    setPnlText('pnl-gross-profit', fmtVND(pnl.loiNhuanGop));
+    setPnlText('pnl-gross-margin', margin(pnl.tiSuatLoiNhuanGop));
+    setPnlText('pnl-net-profit', fmtVND(pnl.loiNhuanRong_NetProfit));
+    setPnlText('pnl-net-margin', `Tỉ suất ròng: ${fmtPercent(pnl.tiSuatLoiNhuanRong)}`);
+
+    // Bảng phân tích: khoản chi hiển thị âm, khoản thu hiển thị dương (0 thì không kèm dấu)
+    setPnlText('table-pnl-rev', fmtVND(pnl.doanhThuBanHang));
+    setPnlText('table-pnl-cogs', fmtVND(-pnl.giaVonHangBan_COGS));
+    setPnlText('table-pnl-gross', fmtVND(pnl.loiNhuanGop));
+    setPnlText('table-pnl-other-inc', fmtVND(pnl.thuKhac, { sign: true }));
+    setPnlText('table-pnl-opex', fmtVND(-pnl.chiPhiVanHanh));
+    setPnlText('table-pnl-payroll', fmtVND(-pnl.chiPhiLuong));
+    setPnlText('table-pnl-spoilage', fmtVND(-pnl.chiPhiHaoHut));
+    setPnlText('table-pnl-net', fmtVND(pnl.loiNhuanRong_NetProfit));
   } catch (err) {
     console.error('Lỗi nạp P&L', err);
+    resetPnlView();
+    showToast('Không kết nối được máy chủ để tải báo cáo P&L', 'error');
   }
 }
 
